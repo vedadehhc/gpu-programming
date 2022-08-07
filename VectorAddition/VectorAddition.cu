@@ -9,11 +9,11 @@ __global__ void vecAdd(float *d_A, float *d_B, float *d_C, int N)
     }
 }
 
-void logCudaError(cudaError_t err)
+void logCudaError(cudaError_t err, int line)
 {
     if (err != cudaSuccess)
     {
-        printf("%s in %s at line %d\n", cudaGetErrorString(err), __FILE__, __LINE__);
+        printf("%s in %s at line %d\n", cudaGetErrorString(err), __FILE__, line);
         exit(EXIT_FAILURE);
     }
 }
@@ -44,21 +44,21 @@ int main()
 
     // allocate device memory
     cudaError_t d_A_mallocError = cudaMalloc(&d_A, vectorSize);
-    logCudaError(d_A_mallocError);
+    logCudaError(d_A_mallocError, __LINE__);
 
     cudaError_t d_B_mallocError = cudaMalloc(&d_B, vectorSize);
-    logCudaError(d_B_mallocError);
+    logCudaError(d_B_mallocError, __LINE__);
 
     cudaError_t d_C_mallocError = cudaMalloc(&d_C, vectorSize);
-    logCudaError(d_C_mallocError);
+    logCudaError(d_C_mallocError, __LINE__);
 
     // copy memory from host to device
     printf("memcpy host to device\n");
     cudaError_t A_memcpyError = cudaMemcpy(d_A, h_A, vectorSize, cudaMemcpyHostToDevice);
-    logCudaError(A_memcpyError);
+    logCudaError(A_memcpyError, __LINE__);
 
     cudaError_t B_memcpyError = cudaMemcpy(d_B, h_B, vectorSize, cudaMemcpyHostToDevice);
-    logCudaError(B_memcpyError);
+    logCudaError(B_memcpyError, __LINE__);
 
     // kernel call
     printf("kernel call\n");
@@ -67,7 +67,7 @@ int main()
     // copy result from device to host
     printf("memcpy device to host\n");
     cudaError_t C_memcpyError = cudaMemcpy(h_C, d_C, vectorSize, cudaMemcpyDeviceToHost);
-    logCudaError(C_memcpyError);
+    logCudaError(C_memcpyError, __LINE__);
 
     // check result
     float maxError = 0.0f;
@@ -79,9 +79,9 @@ int main()
 
     // free device memory
     printf("free device memory\n");
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
+    logCudaError(cudaFree(d_A), __LINE__);
+    logCudaError(cudaFree(d_B), __LINE__);
+    logCudaError(cudaFree(d_C), __LINE__);
 
     // free host memory
     printf("free host memory\n");
