@@ -19,6 +19,9 @@ int timeCheckpoint(clock_t &t)
     return msec;
 }
 
+
+const int TILE_WIDTH = 16;
+
 __host__ __device__ float *getPointer(float *matrix, int numRows, int numCols, int row, int col)
 {
     if (row < 0 || row >= numRows)
@@ -28,25 +31,64 @@ __host__ __device__ float *getPointer(float *matrix, int numRows, int numCols, i
     return (matrix + row * numCols + col);
 }
 
-__global__ void computeSingleEntry(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+__host__ __device__ int ceilDiv(int a, int b)
+{
+    return ((a - 1) / b) + 1;
+}
+
+__global__ void computeSingleEntry(float *d_A, float *d_B, float *d_C, int M, int N, int K)
+{
+    __shared__ float ds_A[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float ds_B[TILE_WIDTH][TILE_WIDTH];
+
     int row = threadIdx.y + blockIdx.y * blockDim.y;
     int col = threadIdx.x + blockIdx.x * blockDim.x;
 
     float *p_C = getPointer(d_C, M, K, row, col);
-    if (p_C == nullptr) return;
-    
+
     float res = 0.0f;
 
     float *p_A;
     float *p_B;
-    for (int i = 0; i < N; i++) {
-        p_A = getPointer(d_A, M, N, row, i);
-        p_B = getPointer(d_B, N, K, i, col);
-        // if (p_A == nullptr || p_B == nullptr) continue;
 
-        res += (*p_A) * (*p_B); 
+    for (int phase = 0; phase < ceilDiv(N, TILE_WIDTH); phase++) 
+    {
+        // load from global memory to shared memory
+        p_A = getPointer(d_A, M, N, row, phase * TILE_WIDTH + threadIdx.x);
+        if (p_A != nullptr)
+        {
+            ds_A[threadIdx.y][threadIdx.x] = *p_A;
+        }
+        else
+        {
+            ds_A[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+        
+        p_B = getPointer(d_B, N, K, phase * TILE_WIDTH + threadIdx.y, col);
+        if (p_B != nullptr)
+        {
+            ds_B[threadIdx.y][threadIdx.x] = *p_B;
+        }
+        else
+        {
+            ds_B[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+
+        // wait for all data movement to complete
+        __syncthreads();
+
+        // use loaded data to add to result
+        for (int i = 0; i < TILE_WIDTH; i++) {
+            res += ds_A[threadIdx.y][i] * ds_B[i][threadIdx.x];
+        }
+
+        // wait for all data consumption to complete
+        __syncthreads();
     }
-    *p_C = res;
+    if (p_C != nullptr)
+    {
+        *p_C = res;
+    }
 }
 
 int main()
@@ -82,22 +124,30 @@ int main()
     float *pMatrix;
     for (int i = 0; i < M; i++)
     {
-        for (int j = 0; j < N; j++) {
+        for (int j = 0; j < N; j++)
+        {
             pMatrix = getPointer(h_A, M, N, i, j);
-            if (pMatrix != nullptr) {
+            if (pMatrix != nullptr)
+            {
                 *pMatrix = A_val;
-            } else {
+            }
+            else
+            {
                 printf("ERROR initializing A\n");
             }
         }
     }
     for (int i = 0; i < N; i++)
     {
-        for (int j = 0; j < K; j++) {
+        for (int j = 0; j < K; j++)
+        {
             pMatrix = getPointer(h_B, N, K, i, j);
-            if (pMatrix != nullptr) {
+            if (pMatrix != nullptr)
+            {
                 *pMatrix = B_val;
-            } else {
+            }
+            else
+            {
                 printf("ERROR initializing B\n");
             }
         }
@@ -106,14 +156,14 @@ int main()
     printf("Host matrix initialization completed \t %d ms\n", timeCheckpoint(t));
 
     // memcpy host to device
-    cudaMemcpy(d_A, h_A, M * N * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B, N * K * sizeof(float), cudaMemcpyHostToDevice);
+    logCudaError(cudaMemcpy(d_A, h_A, M * N * sizeof(float), cudaMemcpyHostToDevice), __LINE__);
+    logCudaError(cudaMemcpy(d_B, h_B, N * K * sizeof(float), cudaMemcpyHostToDevice), __LINE__);
 
     printf("Host to Device Memcpy completed \t %d ms\n", timeCheckpoint(t));
 
     // kernel call
-    dim3 gridDim((K + 1)/2, (M + 1)/2, 1);
-    dim3 blockDim(2, 2, 1);
+    dim3 gridDim(ceilDiv(K, TILE_WIDTH), ceilDiv(M, TILE_WIDTH), 1);
+    dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 
     computeSingleEntry<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
 
@@ -127,12 +177,17 @@ int main()
 
     // validate result
     float maxError = 0.0f;
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < K; j++) {
+    for (int i = 0; i < M; i++)
+    {
+        for (int j = 0; j < K; j++)
+        {
             pMatrix = getPointer(h_C, M, K, i, j);
-            if (pMatrix != nullptr) {
+            if (pMatrix != nullptr)
+            {
                 maxError = max(maxError, abs(*pMatrix - C_val));
-            } else {
+            }
+            else
+            {
                 printf("ERROR reading C\n");
             }
         }
